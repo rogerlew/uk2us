@@ -1,0 +1,392 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+$script = basename($_SERVER['argv'][0] ?? 'uk2us');
+$args = array_slice($_SERVER['argv'] ?? [], 1);
+
+if (in_array('--help', $args, true) || in_array('-h', $args, true)) {
+    display_help($script);
+    exit(0);
+}
+
+$libraryDir = realpath(script_root() . '/lib');
+if ($libraryDir === false) {
+    fwrite(STDERR, "unable to locate converter library\n");
+    exit(1);
+}
+
+require_once $libraryDir . '/AmericanBritishSpellings.php';
+
+$converter = new AmericanBritishSpellings([]);
+
+if (count($args) === 0) {
+    fwrite(STDERR, "usage: {$script} [-] file [...]\n");
+    fwrite(STDERR, "try '{$script} --help' for more information.\n");
+    exit(1);
+}
+
+$status = 0;
+$processedStdin = false;
+
+foreach ($args as $target) {
+    if ($target === '-') {
+        if ($processedStdin) {
+            fwrite(STDERR, "stdin provided more than once\n");
+            $status = 1;
+            continue;
+        }
+
+        $processedStdin = true;
+        $input = stream_get_contents(STDIN);
+
+        if ($input === false) {
+            fwrite(STDERR, "failed reading from stdin\n");
+            $status = 1;
+            continue;
+        }
+
+        $converted = convert_text($converter, $input);
+        fwrite(STDOUT, $converted);
+        continue;
+    }
+
+    if (!file_exists($target)) {
+        fwrite(STDERR, "{$target}: no such file\n");
+        $status = 1;
+        continue;
+    }
+
+    if (is_dir($target)) {
+        fwrite(STDERR, "{$target}: is a directory\n");
+        $status = 1;
+        continue;
+    }
+
+    if (!is_readable($target)) {
+        fwrite(STDERR, "{$target}: not readable\n");
+        $status = 1;
+        continue;
+    }
+
+    if (!is_writable($target)) {
+        fwrite(STDERR, "{$target}: not writable\n");
+        $status = 1;
+        continue;
+    }
+
+    $contents = file_get_contents($target);
+
+    if ($contents === false) {
+        fwrite(STDERR, "{$target}: failed to read file\n");
+        $status = 1;
+        continue;
+    }
+
+    $converted = convert_text($converter, $contents);
+
+    if ($converted === $contents) {
+        continue;
+    }
+
+    if (!write_atomic($target, $converted)) {
+        $status = 1;
+        continue;
+    }
+}
+
+exit($status);
+
+/**
+ * Display the command help output.
+ */
+function display_help(string $script): void
+{
+    $help = <<<TEXT
+{$script} - convert British spellings to American spellings in place
+
+usage: {$script} [-] file [...]
+
+Each file is overwritten with its American spelling equivalent.
+Use '-' to read from stdin and write the converted result to stdout.
+
+TEXT;
+
+    fwrite(STDOUT, $help);
+}
+
+/**
+ * Convert a block of text from British to American spellings.
+ */
+function convert_text(AmericanBritishSpellings $converter, string $text): string
+{
+    static $rules = null;
+
+    if ($rules === null) {
+        $rules = build_conversion_rules($converter);
+    }
+
+    [$patterns, $replacements] = $rules;
+
+    $converted = preg_replace($patterns, $replacements, $text);
+
+    if ($converted === null) {
+        // In the unlikely event of a regex error, fall back to original text.
+        return $text;
+    }
+
+    return $converted;
+}
+
+/**
+ * Build the conversion regexes, applying local customisations.
+ *
+ * @return array{0:array<int,string>,1:array<int,string>}
+ */
+function build_conversion_rules(AmericanBritishSpellings $converter): array
+{
+    $alternatives = $converter->GetSpellingsAndReplacements(['language' => 'american']);
+
+    $patterns = $alternatives['british'];
+    $replacements = $alternatives['american'];
+
+    return apply_custom_rules($patterns, $replacements);
+}
+
+/**
+ * Apply customisations: drop unwanted replacements and add explicit ones.
+ *
+ * @param array<int,string> $patterns
+ * @param array<int,string> $replacements
+ * @return array{0:array<int,string>,1:array<int,string>}
+ */
+function apply_custom_rules(array $patterns, array $replacements): array
+{
+    $config = load_custom_rules_config();
+
+    $skipTargets = [];
+    foreach ($config['skip_replacements'] as $skipWord) {
+        foreach (build_case_variants($skipWord) as $variant) {
+            $skipTargets[$variant] = true;
+        }
+    }
+
+    $filteredPatterns = [];
+    $filteredReplacements = [];
+
+    foreach ($patterns as $index => $pattern) {
+        $replacement = $replacements[$index] ?? null;
+
+        if ($replacement === null) {
+            continue;
+        }
+
+        if (isset($skipTargets[$replacement])) {
+            continue;
+        }
+
+        $filteredPatterns[] = $pattern;
+        $filteredReplacements[] = $replacement;
+    }
+
+    foreach ($config['forced_mappings'] as $british => $american) {
+        foreach (build_case_variants($british) as $variant) {
+            $filteredPatterns[] = '/\b' . preg_quote($variant, '/') . '\b/';
+            $filteredReplacements[] = match_case($variant, $american);
+        }
+    }
+
+    return [$filteredPatterns, $filteredReplacements];
+}
+
+/**
+ * Provide lowercase, uppercase, and capitalised variants for a word.
+ *
+ * @return array<int,string>
+ */
+function build_case_variants(string $word): array
+{
+    $lower = strtolower($word);
+    $upper = strtoupper($word);
+    $capitalised = ucfirst($lower);
+
+    return array_values(array_unique([$lower, $upper, $capitalised]));
+}
+
+/**
+ * Match the replacement's casing to the source token.
+ */
+function match_case(string $source, string $target): string
+{
+    if ($source === strtoupper($source)) {
+        return strtoupper($target);
+    }
+
+    if ($source === strtolower($source)) {
+        return strtolower($target);
+    }
+
+    if ($source === ucfirst(strtolower($source))) {
+        return ucfirst(strtolower($target));
+    }
+
+    return $target;
+}
+
+/**
+ * Load configuration for custom skip/force rules.
+ *
+ * @return array{skip_replacements:array<int,string>,forced_mappings:array<string,string>}
+ */
+function load_custom_rules_config(): array
+{
+    static $config = null;
+
+    if ($config !== null) {
+        return $config;
+    }
+
+    $defaults = [
+        'skip_replacements' => ['schemata'],
+        'forced_mappings' => ['modelling' => 'modeling'],
+    ];
+
+    $configPath = locate_custom_rules_file();
+    if ($configPath === null) {
+        return $config = $defaults;
+    }
+
+    $contents = @file_get_contents($configPath);
+    if ($contents === false) {
+        fwrite(STDERR, "{$configPath}: unable to read custom rules; falling back to defaults\n");
+        return $config = $defaults;
+    }
+
+    $decoded = json_decode($contents, true);
+    if (!is_array($decoded)) {
+        fwrite(STDERR, "{$configPath}: invalid JSON; falling back to defaults\n");
+        return $config = $defaults;
+    }
+
+    $skip = $defaults['skip_replacements'];
+    if (isset($decoded['skip_replacements']) && is_array($decoded['skip_replacements'])) {
+        $skip = [];
+        foreach ($decoded['skip_replacements'] as $entry) {
+            if (!is_string($entry)) {
+                continue;
+            }
+            $entry = trim($entry);
+            if ($entry === '') {
+                continue;
+            }
+            $skip[] = $entry;
+        }
+    }
+
+    $forced = $defaults['forced_mappings'];
+    if (isset($decoded['forced_mappings']) && is_array($decoded['forced_mappings'])) {
+        $forced = [];
+        foreach ($decoded['forced_mappings'] as $british => $american) {
+            if (!is_string($british) || !is_string($american)) {
+                continue;
+            }
+            $british = trim($british);
+            $american = trim($american);
+            if ($british === '' || $american === '') {
+                continue;
+            }
+            $forced[$british] = $american;
+        }
+    }
+
+    return $config = [
+        'skip_replacements' => $skip,
+        'forced_mappings' => $forced,
+    ];
+}
+
+/**
+ * Locate the custom rules configuration file.
+ */
+function locate_custom_rules_file(): ?string
+{
+    static $resolved = false;
+
+    if ($resolved !== false) {
+        return $resolved;
+    }
+
+    $candidates = [];
+
+    $envPath = getenv('UK2US_RULES_FILE');
+    if (is_string($envPath) && $envPath !== '') {
+        $candidates[] = $envPath;
+    }
+
+    $candidates[] = script_root() . '/config/uk2us_rules.json';
+
+    foreach ($candidates as $candidate) {
+        $real = realpath($candidate);
+        if ($real !== false && is_file($real)) {
+            $resolved = $real;
+            return $resolved;
+        }
+    }
+
+    $resolved = null;
+    return null;
+}
+
+/**
+ * Resolve the directory containing this script, following symlinks.
+ */
+function script_root(): string
+{
+    static $root = null;
+
+    if ($root !== null) {
+        return $root;
+    }
+
+    $resolved = realpath(__FILE__);
+    if ($resolved === false) {
+        return $root = __DIR__;
+    }
+
+    return $root = dirname($resolved);
+}
+
+/**
+ * Write content to a file atomically, preserving permissions when possible.
+ */
+function write_atomic(string $path, string $contents): bool
+{
+    $directory = dirname($path);
+    $tempFile = tempnam($directory, 'uk2us_');
+
+    if ($tempFile === false) {
+        fwrite(STDERR, "{$path}: unable to create temporary file\n");
+        return false;
+    }
+
+    $result = file_put_contents($tempFile, $contents);
+    if ($result === false) {
+        fwrite(STDERR, "{$path}: failed to write temporary file\n");
+        @unlink($tempFile);
+        return false;
+    }
+
+    $sourcePermissions = @fileperms($path);
+    if (is_int($sourcePermissions)) {
+        @chmod($tempFile, $sourcePermissions & 0777);
+    }
+
+    if (!@rename($tempFile, $path)) {
+        fwrite(STDERR, "{$path}: failed to move temporary file into place\n");
+        @unlink($tempFile);
+        return false;
+    }
+
+    return true;
+}

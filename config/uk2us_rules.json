@@ -1,0 +1,8 @@
+{
+    "skip_replacements": [
+        "schemata"
+    ],
+    "forced_mappings": {
+        "modelling": "modeling"
+    }
+}

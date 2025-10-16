@@ -1,4 +1,54 @@
-﻿# US/UK Spelling Converter
+﻿# uk2us
+
+`uk2us` is a simple command-line utility for converting British spellings to their American counterparts.  
+It wraps the extensive word lists from [HoldOffHunger/convert-british-to-american-spellings](https://github.com/HoldOffHunger/convert-british-to-american-spellings) and adds a few conveniences:
+
+- In-place rewriting of one or more files, with atomic writes to avoid partial updates.
+- `stdin` / `stdout` mode for use in pipelines (`uk2us -`).
+- Optional override rules so you can skip or force specific replacements without touching the upstream dataset.
+
+## Installation
+
+1. Install the PHP CLI (`sudo apt install php-cli` on Ubuntu/Debian).  
+2. Clone this repository and change into it.
+3. Make the script executable: `chmod +x uk2us`.
+
+## Configuration
+
+Custom substitutions live in `config/uk2us_rules.json`.  
+Edit the JSON to add:
+
+- `"skip_replacements"`: words you never want converted (e.g., `"schemata"`).
+- `"forced_mappings"`: British→American overrides that must always run (e.g., `"modelling": "modeling"`).
+
+When running the script from a symlink, it automatically resolves back to the repo to find this file.  
+To use a different rules file, set `UK2US_RULES_FILE=/path/to/file.json`.
+
+## Usage
+
+```bash
+# Rewrite one or more files in place
+uk2us README.md notes/*.md
+
+# Pipe mode: read British spellings from stdin, emit American spellings to stdout
+cat summary.txt | uk2us -
+```
+
+The command exits with a non-zero status when it encounters unreadable or unwritable files.
+
+## Symlinking
+
+After installation you can make the tool globally available:
+
+```bash
+sudo ln -sf "$(pwd)/uk2us" /usr/local/bin/uk2us
+```
+
+The script detects the real path of the symlink so it can still locate the bundled `lib/` and `config/` directories.
+
+
+
+# US/UK Spelling Converter
 
 *You* provide the text, with either US/UK-spelling.
 
