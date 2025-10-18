@@ -1,0 +1,95 @@
+.TH UK2US 1 "June 2024" "uk2us"
+.SH NAME
+uk2us \- convert British spellings to American spellings
+.SH SYNOPSIS
+.B uk2us
+.RB [ -i ]
+.RI [ file ... ]
+.br
+.B uk2us
+.RB [ -i ]
+.B -
+.br
+.B uk2us
+.B --install-man
+.RI [ path ]
+.br
+.B uk2us
+.RB [ --help ]
+.SH DESCRIPTION
+.B uk2us
+converts text from British spellings to their American equivalents.
+Input is read from files or standard input and the converted text is written
+to standard output unless the
+.B -i
+option is supplied to overwrite the source files in place.
+.PP
+The converter wraps the HoldOffHunger British to American spelling data set and
+applies local overrides that can be customised with configuration files.
+.SH OPTIONS
+.TP
+.B -i , --in-place
+Overwrite each input file with the converted text.  This option cannot be used
+when reading from standard input.
+.TP
+.B --
+Treat all subsequent arguments as file names, even if they begin with a dash.
+.TP
+.B --
+install-man[=path]
+Copy the bundled manual page into
+.I path
+(defaults to
+.BR /usr/local/share/man/man1 ).
+The installed file name matches the command name that invoked
+.BR uk2us .
+The command exits after the installation attempt.
+.TP
+.B --
+help
+Display usage information and exit.
+.TP
+.B -
+Read from standard input.  This can only be used once per invocation.
+.SH CONFIGURATION
+Custom overrides live in
+.BR config/uk2us_rules.json .
+The file contains two arrays:
+.I skip_replacements
+to prevent specific substitutions and
+.I forced_mappings
+for explicit replacements.
+Set the environment variable
+.B UK2US_RULES_FILE
+to point to an alternate JSON configuration.
+.SH EXIT STATUS
+.TP
+.B 0
+All requested operations completed successfully.
+.TP
+.B >0
+One or more errors occurred.
+.SH EXAMPLES
+.TP
+Rewrite files in place:
+.RS
+.nf
+.B uk2us -i README.md notes.txt
+.fi
+.RE
+.TP
+Convert text from standard input to standard output:
+.RS
+.nf
+.B echo "modelling schemata" \| uk2us -
+.fi
+.RE
+.TP
+Install the manual page into a custom location:
+.RS
+.nf
+.B uk2us --install-man=/usr/share/man/man1
+.fi
+.RE
+.SH SEE ALSO
+.BR php (1)

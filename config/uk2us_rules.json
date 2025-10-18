@@ -1,5 +1,12 @@
 {
     "skip_replacements": [
+        "baer",
+        "dialogues",
+        "dove",
+        "perpended",
+        "programable",
+        "reexport",
+        "reexporting",
         "schemata"
     ],
     "forced_mappings": {

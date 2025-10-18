@@ -3,8 +3,8 @@
 `uk2us` is a simple command-line utility for converting British spellings to their American counterparts.  
 It wraps the extensive word lists from [HoldOffHunger/convert-british-to-american-spellings](https://github.com/HoldOffHunger/convert-british-to-american-spellings) and adds a few conveniences:
 
-- In-place rewriting of one or more files, with atomic writes to avoid partial updates.
-- `stdin` / `stdout` mode for use in pipelines (`uk2us -`).
+- Optional in-place rewriting of one or more files, with atomic writes to avoid partial updates.
+- Streams to `stdout` by default for easy piping (`uk2us file` or `uk2us -`).
 - Optional override rules so you can skip or force specific replacements without touching the upstream dataset.
 
 ## Installation
@@ -12,6 +12,7 @@ It wraps the extensive word lists from [HoldOffHunger/convert-british-to-america
 1. Install the PHP CLI (`sudo apt install php-cli` on Ubuntu/Debian).  
 2. Clone this repository and change into it.
 3. Make the script executable: `chmod +x uk2us`.
+4. (Optional) Install the manual page to a man1 directory: `sudo ./uk2us --install-man=/usr/local/share/man/man1`.
 
 ## Configuration
 
@@ -27,11 +28,17 @@ To use a different rules file, set `UK2US_RULES_FILE=/path/to/file.json`.
 ## Usage
 
 ```bash
+# Stream conversion from a file to stdout
+uk2us README.md > README.american.md
+
 # Rewrite one or more files in place
-uk2us README.md notes/*.md
+uk2us -i README.md notes/*.md
 
 # Pipe mode: read British spellings from stdin, emit American spellings to stdout
 cat summary.txt | uk2us -
+
+# Install or refresh the bundled manual page in a custom directory
+uk2us --install-man=./manpages/man1
 ```
 
 The command exits with a non-zero status when it encounters unreadable or unwritable files.

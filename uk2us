@@ -11,6 +11,76 @@ if (in_array('--help', $args, true) || in_array('-h', $args, true)) {
     exit(0);
 }
 
+$inPlace = false;
+$installMan = false;
+$installManDir = null;
+$targets = [];
+$parsingOptions = true;
+
+for ($index = 0, $count = count($args); $index < $count; $index++) {
+    $arg = $args[$index];
+
+    if ($parsingOptions && $arg === '--') {
+        $parsingOptions = false;
+        continue;
+    }
+
+    if ($parsingOptions && ($arg === '-i' || $arg === '--in-place')) {
+        $inPlace = true;
+        continue;
+    }
+
+    if ($parsingOptions && ($arg === '--install-man' || strncmp($arg, '--install-man=', 14) === 0)) {
+        $installMan = true;
+
+        if ($arg === '--install-man') {
+            $next = $args[$index + 1] ?? null;
+            if ($next !== null && $next !== '--' && (!isset($next[0]) || $next[0] !== '-')) {
+                $installManDir = $next;
+                $index++;
+            }
+        } else {
+            $value = substr($arg, 14);
+            if ($value !== false && $value !== '') {
+                $installManDir = $value;
+            } else {
+                $installManDir = null;
+            }
+        }
+
+        continue;
+    }
+
+    if ($parsingOptions && $arg !== '-' && isset($arg[0]) && $arg[0] === '-') {
+        fwrite(STDERR, "{$arg}: unknown option\n");
+        exit(1);
+    }
+
+    $targets[] = $arg;
+}
+
+if ($installManDir !== null && $installManDir !== '/') {
+    $installManDir = rtrim($installManDir, '/');
+    if ($installManDir === '') {
+        $installManDir = '/';
+    }
+}
+
+if ($installMan) {
+    if ($inPlace) {
+        fwrite(STDERR, "--install-man cannot be combined with -i\n");
+        exit(1);
+    }
+
+    if (count($targets) > 0) {
+        fwrite(STDERR, "--install-man cannot be combined with file targets\n");
+        exit(1);
+    }
+
+    $success = install_man_page($script, $installManDir);
+    exit($success ? 0 : 1);
+}
+
 $libraryDir = realpath(script_root() . '/lib');
 if ($libraryDir === false) {
     fwrite(STDERR, "unable to locate converter library\n");
@@ -21,17 +91,25 @@ require_once $libraryDir . '/AmericanBritishSpellings.php';
 
 $converter = new AmericanBritishSpellings([]);
 
-if (count($args) === 0) {
-    fwrite(STDERR, "usage: {$script} [-] file [...]\n");
-    fwrite(STDERR, "try '{$script} --help' for more information.\n");
-    exit(1);
+if (count($targets) === 0) {
+    if ($inPlace) {
+        fwrite(STDERR, "-i requires at least one file target\n");
+        exit(1);
+    }
+    $targets = ['-'];
 }
 
 $status = 0;
 $processedStdin = false;
 
-foreach ($args as $target) {
+foreach ($targets as $target) {
     if ($target === '-') {
+        if ($inPlace) {
+            fwrite(STDERR, "cannot use -i when reading from stdin\n");
+            $status = 1;
+            continue;
+        }
+
         if ($processedStdin) {
             fwrite(STDERR, "stdin provided more than once\n");
             $status = 1;
@@ -70,12 +148,6 @@ foreach ($args as $target) {
         continue;
     }
 
-    if (!is_writable($target)) {
-        fwrite(STDERR, "{$target}: not writable\n");
-        $status = 1;
-        continue;
-    }
-
     $contents = file_get_contents($target);
 
     if ($contents === false) {
@@ -86,14 +158,25 @@ foreach ($args as $target) {
 
     $converted = convert_text($converter, $contents);
 
-    if ($converted === $contents) {
+    if ($inPlace) {
+        if (!is_writable($target)) {
+            fwrite(STDERR, "{$target}: not writable\n");
+            $status = 1;
+            continue;
+        }
+
+        if ($converted === $contents) {
+            continue;
+        }
+
+        if (!write_atomic($target, $converted)) {
+            $status = 1;
+            continue;
+        }
         continue;
     }
 
-    if (!write_atomic($target, $converted)) {
-        $status = 1;
-        continue;
-    }
+    fwrite(STDOUT, $converted);
 }
 
 exit($status);
@@ -104,16 +187,73 @@ exit($status);
 function display_help(string $script): void
 {
     $help = <<<TEXT
-{$script} - convert British spellings to American spellings in place
+{$script} - convert British spellings to American spellings
 
-usage: {$script} [-] file [...]
+usage: {$script} [-i] [file ...]
+       {$script} [-i] -
+       {$script} --install-man[=path]
 
-Each file is overwritten with its American spelling equivalent.
-Use '-' to read from stdin and write the converted result to stdout.
+Input is converted and written to standard output by default.
+Use -i (or --in-place) to overwrite files in place instead.
+When no files are provided, stdin is read automatically.
+With -i, stdin cannot be used as a target.
+Use --install-man to copy the bundled man page into a manual directory.
 
 TEXT;
 
     fwrite(STDOUT, $help);
+}
+
+/**
+ * Install the bundled man page into the chosen destination directory.
+ */
+function install_man_page(string $script, ?string $destination): bool
+{
+    $manSource = script_root() . '/man/uk2us.1';
+
+    if (!is_readable($manSource)) {
+        fwrite(STDERR, "{$manSource}: man page source not found\n");
+        return false;
+    }
+
+    $targetDir = $destination ?? '/usr/local/share/man/man1';
+
+    if ($targetDir === '' || $targetDir === null) {
+        $targetDir = '/usr/local/share/man/man1';
+    } elseif ($targetDir !== '/') {
+        $trimmed = rtrim($targetDir, '/');
+        $targetDir = $trimmed === '' ? '/' : $trimmed;
+    }
+
+    if (!is_dir($targetDir)) {
+        if (!@mkdir($targetDir, 0777, true)) {
+            fwrite(STDERR, "{$targetDir}: failed to create man directory\n");
+            return false;
+        }
+    }
+
+    if (!is_writable($targetDir)) {
+        fwrite(STDERR, "{$targetDir}: directory not writable\n");
+        return false;
+    }
+
+    $contents = file_get_contents($manSource);
+    if ($contents === false) {
+        fwrite(STDERR, "{$manSource}: failed to read man page contents\n");
+        return false;
+    }
+
+    $separator = substr($targetDir, -1) === '/' ? '' : '/';
+    $targetPath = $targetDir . $separator . basename($script) . '.1';
+
+    if (!write_atomic($targetPath, $contents)) {
+        return false;
+    }
+
+    @chmod($targetPath, 0644);
+
+    fwrite(STDOUT, "installed man page: {$targetPath}\n");
+    return true;
 }
 
 /**
